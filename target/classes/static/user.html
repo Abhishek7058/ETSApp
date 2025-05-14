@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ETS - User Interface</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        #map {
+            height: 500px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        .online-status {
+            padding: 5px 10px;
+            border-radius: 3px;
+            display: inline-block;
+            margin: 10px 0;
+        }
+        .online {
+            background-color: #28a745;
+            color: white;
+        }
+        .offline {
+            background-color: #dc3545;
+            color: white;
+        }
+        .otp-display {
+            font-size: 24px;
+            font-weight: bold;
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            display: none;
+        }
+        .pac-container {
+            z-index: 1051 !important;
+        }
+        #map-error {
+            display: none;
+            padding: 20px;
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1>ETS - User Interface</h1>
+        
+        <div class="card">
+            <div class="card-header">
+                <h4>Connect to Tracking System</h4>
+            </div>
+            <div class="card-body">
+                <div class="form-group">
+                    <label for="userId">User ID:</label>
+                    <input type="text" class="form-control" id="userId" placeholder="Enter your user ID">
+                </div>
+                <div class="form-group">
+                    <label for="slotId">Slot ID:</label>
+                    <input type="text" class="form-control" id="slotId" placeholder="Enter slot ID to connect">
+                </div>
+                <button id="connectBtn" class="btn btn-primary">Connect</button>
+                <button id="disconnectBtn" class="btn btn-danger" disabled>Disconnect</button>
+                
+                <div id="driverStatus" class="online-status offline">Driver Offline</div>
+            </div>
+        </div>
+        
+        <div class="card mt-4">
+            <div class="card-header">
+                <h4>Trip Request</h4>
+            </div>
+            <div class="card-body">
+                <div class="form-group">
+                    <label for="pickupAddress">Pickup Location:</label>
+                    <input type="text" class="form-control" id="pickupAddress" placeholder="Enter pickup address">
+                </div>
+                <div class="form-group">
+                    <label for="dropAddress">Drop Location:</label>
+                    <input type="text" class="form-control" id="dropAddress" placeholder="Enter drop address">
+                </div>
+                <button id="requestTripBtn" class="btn btn-success" disabled>Request Trip</button>
+                
+                <div id="tripStatus" class="mt-3"></div>
+                <div id="otpDisplay" class="otp-display"></div>
+            </div>
+        </div>
+        
+        <div id="map-error"></div>
+        <div id="map"></div>
+        
+        <div class="card mt-2 mb-4">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/blue-dot.png" width="20" /> You</span>
+                        <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/green-dot.png" width="20" /> Driver</span>
+                    </div>
+                    <div>
+                        <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/red-dot.png" width="20" /> Pickup</span>
+                        <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/purple-dot.png" width="20" /> Drop</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript libraries -->
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    
+    <!-- Main script with fixed Google Maps implementation -->
+    <script>
+        // Handle Google Maps authentication failure
+        function gm_authFailure() {
+            $('#map-error').html('Google Maps API key is invalid or has expired. Please check your API key.').show();
+            $('#map').hide();
+        }
+
+        // WebSocket connection
+        let stompClient = null;
+        let connected = false;
+        let userId = '';
+        let slotId = '';
+        let map;
+        let userMarker;
+        let driverMarker;
+        let driverOnline = false;
+        
+        // Location tracking variables
+        let watchId;
+        let currentLat = 0;
+        let currentLng = 0;
+        
+        // Places autocomplete
+        let pickupAutocomplete;
+        let dropAutocomplete;
+        let pickupLatLng = null;
+        let dropLatLng = null;
+        
+        // Map features
+        let pickupMarker;
+        let dropMarker;
+        let directionsRenderer;
+        let directionsService;
+        
+        // Initialize Google Maps
+        function initMap() {
+            try {
+                // Hide error message if shown previously
+                $('#map-error').hide();
+                $('#map').show();
+                
+                // Default position (will be updated with current location)
+                const defaultPosition = { lat: 37.7749, lng: -122.4194 };
+                
+                // Create the map
+                map = new google.maps.Map(document.getElementById("map"), {
+                    zoom: 15,
+                    center: defaultPosition,
+                });
+                
+                // Initialize directions service
+                directionsService = new google.maps.DirectionsService();
+                
+                // Create markers (they will be positioned later)
+                userMarker = new google.maps.Marker({
+                    position: defaultPosition,
+                    map: map,
+                    title: "Your Location",
+                    icon: "http://maps.google.com/mapfiles/ms/icons/blue-dot.png"
+                });
+                
+                driverMarker = new google.maps.Marker({
+                    position: defaultPosition,
+                    map: map,
+                    title: "Driver Location",
+                    icon: "http://maps.google.com/mapfiles/ms/icons/green-dot.png",
+                    visible: false
+                });
+                
+                // Initialize places autocomplete
+                initPlacesAutocomplete();
+                
+                // Get current position
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => {
+                            const pos = {
+                                lat: position.coords.latitude,
+                                lng: position.coords.longitude
+                            };
+                            currentLat = pos.lat;
+                            currentLng = pos.lng;
+                            
+                            userMarker.setPosition(pos);
+                            map.setCenter(pos);
+                            
+                            // Update autocomplete bias after getting location
+                            updateAutocompleteBias(pos.lat, pos.lng);
+                        },
+                        (error) => {
+                            console.error("Geolocation error:", error);
+                        },
+                        {
+                            enableHighAccuracy: true,
+                            timeout: 10000,
+                            maximumAge: 0
+                        }
+                    );
+                } else {
+                    console.error("Browser doesn't support geolocation");
+                }
+            } catch (error) {
+                console.error("Error initializing map:", error);
+                $('#map-error').html('Error initializing Google Maps: ' + error.message).show();
+                $('#map').hide();
+            }
+        }
+        
+        // Initialize Places Autocomplete
+        function initPlacesAutocomplete() {
+            try {
+                // Check if Google Places API is available
+                if (!google.maps.places) {
+                    console.error("Google Places API not loaded");
+                    $('#map-error').html('Google Places API not loaded. Please check your API key.').show();
+                    return;
+                }
+                
+                // Initialize autocomplete for pickup address
+                pickupAutocomplete = new google.maps.places.Autocomplete(
+                    document.getElementById("pickupAddress"),
+                    {
+                        fields: ["formatted_address", "geometry", "name"],
+                        types: ["geocode", "establishment"]
+                    }
+                );
+                
+                // Initialize autocomplete for drop address
+                dropAutocomplete = new google.maps.places.Autocomplete(
+                    document.getElementById("dropAddress"),
+                    {
+                        fields: ["formatted_address", "geometry", "name"],
+                        types: ["geocode", "establishment"]
+                    }
+                );
+                
+                // Set initial bias to wherever the map is centered
+                updateAutocompleteBias(map.getCenter().lat(), map.getCenter().lng());
+                
+                // Listen for place selection on pickup
+                pickupAutocomplete.addListener("place_changed", () => {
+                    const place = pickupAutocomplete.getPlace();
+                    
+                    if (!place.geometry) {
+                        console.error("Place has no geometry");
+                        return;
+                    }
+                    
+                    pickupLatLng = {
+                        lat: place.geometry.location.lat(),
+                        lng: place.geometry.location.lng()
+                    };
+                    
+                    // Update pickup marker on map
+                    if (!pickupMarker) {
+                        pickupMarker = new google.maps.Marker({
+                            position: pickupLatLng,
+                            map: map,
+                            title: "Pickup Location",
+                            icon: "http://maps.google.com/mapfiles/ms/icons/red-dot.png"
+                        });
+                    } else {
+                        pickupMarker.setPosition(pickupLatLng);
+                    }
+                    pickupMarker.setVisible(true);
+                    
+                    // Adjust map to show both user location and pickup
+                    adjustMapBounds();
+                });
+                
+                // Listen for place selection on drop
+                dropAutocomplete.addListener("place_changed", () => {
+                    const place = dropAutocomplete.getPlace();
+                    
+                    if (!place.geometry) {
+                        console.error("Place has no geometry");
+                        return;
+                    }
+                    
+                    dropLatLng = {
+                        lat: place.geometry.location.lat(),
+                        lng: place.geometry.location.lng()
+                    };
+                    
+                    // Update drop marker on map
+                    if (!dropMarker) {
+                        dropMarker = new google.maps.Marker({
+                            position: dropLatLng,
+                            map: map,
+                            title: "Drop Location",
+                            icon: "http://maps.google.com/mapfiles/ms/icons/purple-dot.png"
+                        });
+                    } else {
+                        dropMarker.setPosition(dropLatLng);
+                    }
+                    dropMarker.setVisible(true);
+                    
+                    // Adjust map to show both user location and pickup
+                    adjustMapBounds();
+                    
+                    // If both pickup and drop are set, draw route
+                    if (pickupLatLng) {
+                        drawRoute();
+                    }
+                });
+            } catch (error) {
+                console.error("Error initializing Places Autocomplete:", error);
+                $('#map-error').html('Error initializing Google Places: ' + error.message).show();
+            }
+        }
+        
+        // Update the autocomplete bias to current location
+        function updateAutocompleteBias(lat, lng) {
+            if (pickupAutocomplete && dropAutocomplete) {
+                const geolocation = { lat: lat, lng: lng };
+                const circle = new google.maps.Circle({
+                    center: geolocation,
+                    radius: 100000  // 100km radius for suggestions
+                });
+                
+                pickupAutocomplete.setBounds(circle.getBounds());
+                dropAutocomplete.setBounds(circle.getBounds());
+            }
+        }
+        
+        // Draw route between pickup and drop locations
+        function drawRoute() {
+            if (!pickupLatLng || !dropLatLng || !directionsService) return;
+            
+            try {
+                if (!directionsRenderer) {
+                    directionsRenderer = new google.maps.DirectionsRenderer({
+                        suppressMarkers: true,
+                        polylineOptions: {
+                            strokeColor: "#007bff",
+                            strokeOpacity: 0.7,
+                            strokeWeight: 5
+                        },
+                        map: map
+                    });
+                }
+                
+                directionsService.route(
+                    {
+                        origin: pickupLatLng,
+                        destination: dropLatLng,
+                        travelMode: google.maps.TravelMode.DRIVING
+                    },
+                    (response, status) => {
+                        if (status === "OK") {
+                            directionsRenderer.setDirections(response);
+                        } else {
+                            console.error("Directions request failed due to " + status);
+                            if (status === "ZERO_RESULTS") {
+                                alert("No driving route found between these locations. Try different locations.");
+                            }
+                        }
+                    }
+                );
+            } catch (error) {
+                console.error("Error drawing route:", error);
+            }
+        }
+        
+        // Adjust map bounds to show all relevant markers
+        function adjustMapBounds() {
+            if (!map) return;
+            
+            try {
+                const bounds = new google.maps.LatLngBounds();
+                
+                // Add user location
+                bounds.extend(userMarker.getPosition());
+                
+                // Add pickup location if exists
+                if (pickupMarker && pickupMarker.getVisible()) {
+                    bounds.extend(pickupMarker.getPosition());
+                }
+                
+                // Add drop location if exists
+                if (dropMarker && dropMarker.getVisible()) {
+                    bounds.extend(dropMarker.getPosition());
+                }
+                
+                // Add driver location if visible
+                if (driverMarker && driverMarker.getVisible()) {
+                    bounds.extend(driverMarker.getPosition());
+                }
+                
+                // Fit bounds with padding
+                map.fitBounds(bounds);
+            } catch (error) {
+                console.error("Error adjusting map bounds:", error);
+            }
+        }
+        
+        // Connect to WebSocket
+        function connect() {
+            userId = $("#userId").val().trim();
+            slotId = $("#slotId").val().trim();
+            
+            if (!userId || !slotId) {
+                alert("Please enter User ID and Slot ID");
+                return;
+            }
+            
+            const socket = new SockJS('/ws');
+            stompClient = Stomp.over(socket);
+            
+            stompClient.connect({}, function(frame) {
+                console.log('Connected: ' + frame);
+                connected = true;
+                
+                // Enable/disable buttons
+                $("#connectBtn").prop("disabled", true);
+                $("#disconnectBtn").prop("disabled", false);
+                $("#requestTripBtn").prop("disabled", !driverOnline);
+                
+                // Subscribe to topics
+                stompClient.subscribe('/topic/slot/' + slotId, handleSlotMessages);
+                stompClient.subscribe('/topic/slot/' + slotId + '/location', handleLocationMessages);
+                stompClient.subscribe('/topic/slot/' + slotId + '/trips', handleTripMessages);
+                stompClient.subscribe('/user/queue/notifications', handleNotifications);
+                stompClient.subscribe('/user/queue/location', handleDriverLocation);
+                stompClient.subscribe('/user/queue/trips', handleTripUpdates);
+                
+                // Send connection message
+                sendConnectionMessage("CONNECTED");
+                
+                // Start sending location updates
+                startLocationTracking();
+            }, function(error) {
+                console.error('Error connecting to WebSocket: ', error);
+                alert('Failed to connect. Please try again.');
+                connected = false;
+            });
+        }
+        
+        // Disconnect from WebSocket
+        function disconnect() {
+            if (stompClient !== null && connected) {
+                // Send disconnect message
+                sendConnectionMessage("DISCONNECTED");
+                
+                // Stop location tracking
+                stopLocationTracking();
+                
+                // Disconnect from WebSocket
+                stompClient.disconnect(function() {
+                    console.log("Disconnected");
+                    connected = false;
+                    
+                    // Enable/disable buttons
+                    $("#connectBtn").prop("disabled", false);
+                    $("#disconnectBtn").prop("disabled", true);
+                    $("#requestTripBtn").prop("disabled", true);
+                    
+                    // Update driver status
+                    updateDriverStatus(false);
+                });
+            }
+        }
+        
+        // Send connection message
+        function sendConnectionMessage(status) {
+            stompClient.send("/app/user.connect", {}, JSON.stringify({
+                slotId: slotId,
+                userId: userId,
+                status: status,
+                messageType: "CONNECTION_UPDATE"
+            }));
+        }
+        
+        // Send location update
+        function sendLocationUpdate() {
+            if (connected) {
+                stompClient.send("/app/location.update", {}, JSON.stringify({
+                    slotId: slotId,
+                    userId: userId,
+                    latitude: currentLat,
+                    longitude: currentLng,
+                    timestamp: Date.now(),
+                    messageType: "LOCATION_UPDATE"
+                }));
+            }
+        }
+        
+        // Request a trip
+        function requestTrip() {
+            const pickupAddress = $("#pickupAddress").val().trim();
+            const dropAddress = $("#dropAddress").val().trim();
+            
+            if (!pickupAddress || !dropAddress) {
+                alert("Please enter pickup and drop locations");
+                return;
+            }
+            
+            // Use coordinates from Places API if available
+            const pickupLat = pickupLatLng ? pickupLatLng.lat : currentLat;
+            const pickupLng = pickupLatLng ? pickupLatLng.lng : currentLng;
+            const dropLat = dropLatLng ? dropLatLng.lat : currentLat + 0.01;
+            const dropLng = dropLatLng ? dropLatLng.lng : currentLng + 0.01;
+            
+            stompClient.send("/app/trip.request", {}, JSON.stringify({
+                slotId: slotId,
+                userId: userId,
+                pickupLatitude: pickupLat,
+                pickupLongitude: pickupLng,
+                pickupAddress: pickupAddress,
+                dropLatitude: dropLat,
+                dropLongitude: dropLng,
+                dropAddress: dropAddress,
+                messageType: "TRIP_UPDATE"
+            }));
+            
+            $("#tripStatus").html("Trip requested. Waiting for driver...");
+        }
+        
+        // Start tracking location
+        function startLocationTracking() {
+            if (navigator.geolocation) {
+                watchId = navigator.geolocation.watchPosition(
+                    (position) => {
+                        currentLat = position.coords.latitude;
+                        currentLng = position.coords.longitude;
+                        
+                        // Update user marker on map
+                        const pos = { lat: currentLat, lng: currentLng };
+                        userMarker.setPosition(pos);
+                        
+                        // Send location update
+                        sendLocationUpdate();
+                    },
+                    (error) => {
+                        console.error("Error getting location: ", error);
+                    },
+                    { 
+                        enableHighAccuracy: true,
+                        timeout: 5000,
+                        maximumAge: 0
+                    }
+                );
+            }
+        }
+        
+        // Stop tracking location
+        function stopLocationTracking() {
+            if (watchId) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
+        }
+        
+        // Handle slot messages
+        function handleSlotMessages(message) {
+            const data = JSON.parse(message.body);
+            
+            if (data.messageType === "CONNECTION_UPDATE") {
+                // If it's a driver connection update
+                if (data.driverId) {
+                    updateDriverStatus(data.status === "CONNECTED");
+                }
+            }
+        }
+        
+        // Handle location messages
+        function handleLocationMessages(message) {
+            const data = JSON.parse(message.body);
+            
+            if (data.messageType === "LOCATION_UPDATE") {
+                // If it's a driver location update
+                if (data.driverId) {
+                    updateDriverMarker(data.latitude, data.longitude);
+                }
+            }
+        }
+        
+        // Handle trip messages
+        function handleTripMessages(message) {
+            const data = JSON.parse(message.body);
+            
+            if (data.messageType === "TRIP_UPDATE") {
+                updateTripStatus(data);
+            }
+        }
+        
+        // Handle notifications
+        function handleNotifications(message) {
+            const data = JSON.parse(message.body);
+            
+            if (data.messageType === "CONNECTION_UPDATE") {
+                if (data.driverId) {
+                    updateDriverStatus(data.status === "CONNECTED");
+                }
+            }
+        }
+        
+        // Handle driver location updates
+        function handleDriverLocation(message) {
+            const data = JSON.parse(message.body);
+            
+            if (data.messageType === "LOCATION_UPDATE" && data.driverId) {
+                updateDriverMarker(data.latitude, data.longitude);
+            }
+        }
+        
+        // Handle trip updates
+        function handleTripUpdates(message) {
+            const data = JSON.parse(message.body);
+            
+            if (data.messageType === "TRIP_UPDATE") {
+                updateTripStatus(data);
+            }
+        }
+        
+        // Update driver status indicator
+        function updateDriverStatus(online) {
+            driverOnline = online;
+            
+            if (online) {
+                $("#driverStatus").removeClass("offline").addClass("online").text("Driver Online");
+            } else {
+                $("#driverStatus").removeClass("online").addClass("offline").text("Driver Offline");
+                driverMarker.setVisible(false);
+            }
+            
+            // Enable/disable request trip button based on driver status
+            $("#requestTripBtn").prop("disabled", !online);
+        }
+        
+        // Update driver marker on map
+        function updateDriverMarker(lat, lng) {
+            const pos = { lat: lat, lng: lng };
+            driverMarker.setPosition(pos);
+            driverMarker.setVisible(true);
+        }
+        
+        // Update trip status
+        function updateTripStatus(data) {
+            switch (data.status) {
+                case "REQUESTED":
+                    $("#tripStatus").html("Trip requested. Waiting for driver...");
+                    break;
+                case "ACCEPTED":
+                    $("#tripStatus").html("Trip accepted by driver. Driver is on the way.");
+                    break;
+                case "ARRIVED":
+                    $("#tripStatus").html("Driver has arrived. OTP for verification:");
+                    $("#otpDisplay").show().text(data.otp);
+                    break;
+                case "COMPLETED":
+                    $("#tripStatus").html("Trip completed.");
+                    $("#otpDisplay").hide();
+                    clearRouteAndMarkers();
+                    break;
+                case "CANCELLED":
+                    $("#tripStatus").html("Trip cancelled.");
+                    $("#otpDisplay").hide();
+                    clearRouteAndMarkers();
+                    break;
+            }
+        }
+        
+        // Clear route and markers from the map
+        function clearRouteAndMarkers() {
+            // Clear directions
+            if (directionsRenderer) {
+                directionsRenderer.setMap(null);
+                directionsRenderer = null;
+            }
+            
+            // Hide pickup marker
+            if (pickupMarker) {
+                pickupMarker.setVisible(false);
+            }
+            
+            // Hide drop marker
+            if (dropMarker) {
+                dropMarker.setVisible(false);
+            }
+            
+            // Reset pickup and drop fields
+            $("#pickupAddress").val("");
+            $("#dropAddress").val("");
+            
+            // Reset coordinates
+            pickupLatLng = null;
+            dropLatLng = null;
+        }
+        
+        // Event listeners
+        $(document).ready(function() {
+            $("#connectBtn").click(connect);
+            $("#disconnectBtn").click(disconnect);
+            $("#requestTripBtn").click(requestTrip);
+            
+            // Handle page unload
+            $(window).on('beforeunload', function() {
+                disconnect();
+            });
+        });
+    </script>
+    
+    <!-- Load Google Maps API with the required libraries -->
+    <script async defer 
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCelDo4I5cPQ72TfCTQW-arhPZ7ALNcp8w&libraries=places,directions&callback=initMap&v=weekly">
+    </script>
+</body>
+</html>

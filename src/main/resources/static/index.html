@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ETS - Location Tracking System</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        .jumbotron {
+            background-color: #f8f9fa;
+            padding: 2rem;
+        }
+        .card {
+            margin: 1rem 0;
+            transition: transform 0.3s;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <div class="jumbotron">
+            <h1 class="display-4">ETS Location Tracking System</h1>
+            <p class="lead">Real-time location tracking and ride management with WebSocket communication</p>
+            <hr class="my-4">
+            <p>Choose your interface to get started:</p>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">User Interface</h5>
+                        <p class="card-text">Connect to a slot, view driver location, and request rides.</p>
+                        <a href="/user.html" class="btn btn-primary">Go to User Interface</a>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Driver Interface</h5>
+                        <p class="card-text">Connect to a slot, see user locations, and manage trip requests.</p>
+                        <a href="/driver.html" class="btn btn-success">Go to Driver Interface</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card mt-4">
+            <div class="card-header">
+                <h4>How to Use</h4>
+            </div>
+            <div class="card-body">
+                <ol>
+                    <li>Open both User and Driver interfaces in separate browser tabs</li>
+                    <li>Enter a <strong>User ID</strong> in the User interface and a <strong>Driver ID</strong> in the Driver interface</li>
+                    <li>Enter the same <strong>Slot ID</strong> in both interfaces to connect them</li>
+                    <li>Click <strong>Connect</strong> to establish WebSocket connection</li>
+                    <li>View real-time location updates on maps</li>
+                    <li>Request trips from the User interface</li>
+                    <li>Accept/reject trips from the Driver interface</li>
+                    <li>When driver arrives, verify with OTP</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</body>
+</html> 
