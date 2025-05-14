@@ -77,15 +77,44 @@
                 <h4>Trip Request</h4>
             </div>
             <div class="card-body">
-                <div class="form-group">
-                    <label for="pickupAddress">Pickup Location:</label>
-                    <input type="text" class="form-control" id="pickupAddress" placeholder="Enter pickup address">
+                <ul class="nav nav-tabs" id="rideTypeTabs" role="tablist">
+                    <li class="nav-item">
+                        <a class="nav-link active" id="instant-tab" data-toggle="tab" href="#instantRide" role="tab">Instant Ride</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" id="scheduled-tab" data-toggle="tab" href="#scheduledRide" role="tab">Scheduled Ride</a>
+                    </li>
+                </ul>
+                
+                <div class="tab-content mt-3">
+                    <div class="tab-pane fade show active" id="instantRide" role="tabpanel">
+                        <div class="form-group">
+                            <label for="pickupAddress">Pickup Location:</label>
+                            <input type="text" class="form-control" id="pickupAddress" placeholder="Enter pickup address">
+                        </div>
+                        <div class="form-group">
+                            <label for="dropAddress">Drop Location:</label>
+                            <input type="text" class="form-control" id="dropAddress" placeholder="Enter drop address">
+                        </div>
+                        <button id="requestTripBtn" class="btn btn-success" disabled>Request Instant Ride</button>
+                    </div>
+                    
+                    <div class="tab-pane fade" id="scheduledRide" role="tabpanel">
+                        <div class="form-group">
+                            <label for="scheduledPickupAddress">Pickup Location:</label>
+                            <input type="text" class="form-control" id="scheduledPickupAddress" placeholder="Enter pickup address">
+                        </div>
+                        <div class="form-group">
+                            <label for="scheduledDropAddress">Drop Location:</label>
+                            <input type="text" class="form-control" id="scheduledDropAddress" placeholder="Enter drop address">
+                        </div>
+                        <div class="form-group">
+                            <label for="scheduledTime">Pickup Time:</label>
+                            <input type="datetime-local" class="form-control" id="scheduledTime">
+                        </div>
+                        <button id="scheduleRideBtn" class="btn btn-primary" disabled>Schedule Ride</button>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="dropAddress">Drop Location:</label>
-                    <input type="text" class="form-control" id="dropAddress" placeholder="Enter drop address">
-                </div>
-                <button id="requestTripBtn" class="btn btn-success" disabled>Request Trip</button>
                 
                 <div id="tripStatus" class="mt-3"></div>
                 <div id="otpDisplay" class="otp-display"></div>
@@ -99,8 +128,8 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between">
                     <div>
-                        <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/blue-dot.png" width="20" /> You</span>
-                        <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/green-dot.png" width="20" /> Driver</span>
+                        <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/blue-pushpin.png" width="20" /> You</span>
+                        <span class="mr-2"><img src="https://maps.google.com/mapfiles/ms/icons/cabs.png" width="20" /> Driver</span>
                     </div>
                     <div>
                         <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/red-dot.png" width="20" /> Pickup</span>
@@ -176,15 +205,49 @@
                     position: defaultPosition,
                     map: map,
                     title: "Your Location",
-                    icon: "http://maps.google.com/mapfiles/ms/icons/blue-dot.png"
+                    icon: "http://maps.google.com/mapfiles/ms/icons/blue-pushpin.png"
                 });
                 
                 driverMarker = new google.maps.Marker({
                     position: defaultPosition,
                     map: map,
                     title: "Driver Location",
-                    icon: "http://maps.google.com/mapfiles/ms/icons/green-dot.png",
+                    icon: "https://maps.google.com/mapfiles/ms/icons/cabs.png",
                     visible: false
+                });
+                
+                // Create pickup and drop markers
+                pickupMarker = new google.maps.Marker({
+                    map: map,
+                    title: "Pickup Location",
+                    icon: "http://maps.google.com/mapfiles/ms/icons/red-dot.png",
+                    visible: false
+                });
+                
+                dropMarker = new google.maps.Marker({
+                    map: map,
+                    title: "Drop Location",
+                    icon: "http://maps.google.com/mapfiles/ms/icons/purple-dot.png",
+                    visible: false
+                });
+                
+                // Add click event to map for selecting locations
+                map.addListener("click", (event) => {
+                    // Check if pickup or drop is currently selected
+                    const activeLocationField = document.activeElement;
+                    const isPickupActive = activeLocationField && activeLocationField.id === "pickupAddress";
+                    const isDropActive = activeLocationField && activeLocationField.id === "dropAddress";
+                    
+                    if (isPickupActive) {
+                        // Set pickup location
+                        setPickupLocation(event.latLng);
+                    } else if (isDropActive) {
+                        // Set drop location
+                        setDropLocation(event.latLng);
+                    } else {
+                        // Default to drop location if no field is focused
+                        setDropLocation(event.latLng);
+                    }
                 });
                 
                 // Initialize places autocomplete
@@ -236,7 +299,7 @@
                     return;
                 }
                 
-                // Initialize autocomplete for pickup address
+                // Initialize autocomplete for instant ride pickup address
                 pickupAutocomplete = new google.maps.places.Autocomplete(
                     document.getElementById("pickupAddress"),
                     {
@@ -245,9 +308,27 @@
                     }
                 );
                 
-                // Initialize autocomplete for drop address
+                // Initialize autocomplete for instant ride drop address
                 dropAutocomplete = new google.maps.places.Autocomplete(
                     document.getElementById("dropAddress"),
+                    {
+                        fields: ["formatted_address", "geometry", "name"],
+                        types: ["geocode", "establishment"]
+                    }
+                );
+                
+                // Initialize autocomplete for scheduled ride pickup address
+                const scheduledPickupAutocomplete = new google.maps.places.Autocomplete(
+                    document.getElementById("scheduledPickupAddress"),
+                    {
+                        fields: ["formatted_address", "geometry", "name"],
+                        types: ["geocode", "establishment"]
+                    }
+                );
+                
+                // Initialize autocomplete for scheduled ride drop address
+                const scheduledDropAutocomplete = new google.maps.places.Autocomplete(
+                    document.getElementById("scheduledDropAddress"),
                     {
                         fields: ["formatted_address", "geometry", "name"],
                         types: ["geocode", "establishment"]
@@ -435,6 +516,7 @@
                 $("#connectBtn").prop("disabled", true);
                 $("#disconnectBtn").prop("disabled", false);
                 $("#requestTripBtn").prop("disabled", !driverOnline);
+                $("#scheduleRideBtn").prop("disabled", !driverOnline);
                 
                 // Subscribe to topics
                 stompClient.subscribe('/topic/slot/' + slotId, handleSlotMessages);
@@ -474,6 +556,7 @@
                     $("#connectBtn").prop("disabled", false);
                     $("#disconnectBtn").prop("disabled", true);
                     $("#requestTripBtn").prop("disabled", true);
+                    $("#scheduleRideBtn").prop("disabled", true);
                     
                     // Update driver status
                     updateDriverStatus(false);
@@ -497,6 +580,7 @@
                 stompClient.send("/app/location.update", {}, JSON.stringify({
                     slotId: slotId,
                     userId: userId,
+                    driverId: null,  // Explicitly set to null to ensure it's included in the message
                     latitude: currentLat,
                     longitude: currentLng,
                     timestamp: Date.now(),
@@ -530,10 +614,65 @@
                 dropLatitude: dropLat,
                 dropLongitude: dropLng,
                 dropAddress: dropAddress,
+                rideType: "INSTANT",
                 messageType: "TRIP_UPDATE"
             }));
             
             $("#tripStatus").html("Trip requested. Waiting for driver...");
+        }
+        
+        // Schedule a ride
+        function scheduleRide() {
+            const pickupAddress = $("#scheduledPickupAddress").val().trim();
+            const dropAddress = $("#scheduledDropAddress").val().trim();
+            const scheduledTime = $("#scheduledTime").val();
+            
+            if (!pickupAddress || !dropAddress || !scheduledTime) {
+                alert("Please enter pickup location, drop location, and pickup time");
+                return;
+            }
+            
+            // Get coordinates from geocoding
+            const geocoder = new google.maps.Geocoder();
+            
+            geocoder.geocode({ address: pickupAddress }, (pickupResults, pickupStatus) => {
+                if (pickupStatus !== "OK") {
+                    alert("Could not find pickup location. Please try a different address.");
+                    return;
+                }
+                
+                const pickupLat = pickupResults[0].geometry.location.lat();
+                const pickupLng = pickupResults[0].geometry.location.lng();
+                
+                geocoder.geocode({ address: dropAddress }, (dropResults, dropStatus) => {
+                    if (dropStatus !== "OK") {
+                        alert("Could not find drop location. Please try a different address.");
+                        return;
+                    }
+                    
+                    const dropLat = dropResults[0].geometry.location.lat();
+                    const dropLng = dropResults[0].geometry.location.lng();
+                    
+                    // Generate a random slot ID for the scheduled ride
+                    const scheduledSlotId = "SCH-" + Math.floor(Math.random() * 10000);
+                    
+                    stompClient.send("/app/trip.request", {}, JSON.stringify({
+                        slotId: slotId,
+                        userId: userId,
+                        pickupLatitude: pickupLat,
+                        pickupLongitude: pickupLng,
+                        pickupAddress: pickupAddress,
+                        dropLatitude: dropLat,
+                        dropLongitude: dropLng,
+                        dropAddress: dropAddress,
+                        scheduledTime: scheduledTime,
+                        rideType: "SCHEDULED",
+                        messageType: "TRIP_UPDATE"
+                    }));
+                    
+                    $("#tripStatus").html(`Ride scheduled for ${new Date(scheduledTime).toLocaleString()}`);
+                });
+            });
         }
         
         // Start tracking location
@@ -587,9 +726,12 @@
         function handleLocationMessages(message) {
             const data = JSON.parse(message.body);
             
+            console.log("Location message received:", data); // Add logging
+            
             if (data.messageType === "LOCATION_UPDATE") {
                 // If it's a driver location update
                 if (data.driverId) {
+                    console.log("Driver location update received, driverId:", data.driverId);
                     updateDriverMarker(data.latitude, data.longitude);
                 }
             }
@@ -628,7 +770,9 @@
         function handleTripUpdates(message) {
             const data = JSON.parse(message.body);
             
-            if (data.messageType === "TRIP_UPDATE") {
+            console.log("Trip update received:", data); // Add logging to help debug
+            
+            if (data.messageType === "TRIP_UPDATE" || data.status === "OTP_REQUESTED") {
                 updateTripStatus(data);
             }
         }
@@ -644,8 +788,9 @@
                 driverMarker.setVisible(false);
             }
             
-            // Enable/disable request trip button based on driver status
+            // Enable/disable both trip request buttons based on driver status
             $("#requestTripBtn").prop("disabled", !online);
+            $("#scheduleRideBtn").prop("disabled", !online);
         }
         
         // Update driver marker on map
@@ -657,6 +802,8 @@
         
         // Update trip status
         function updateTripStatus(data) {
+            console.log("Updating trip status:", data); // Add logging to help debug
+            
             switch (data.status) {
                 case "REQUESTED":
                     $("#tripStatus").html("Trip requested. Waiting for driver...");
@@ -665,11 +812,23 @@
                     $("#tripStatus").html("Trip accepted by driver. Driver is on the way.");
                     break;
                 case "ARRIVED":
-                    $("#tripStatus").html("Driver has arrived. OTP for verification:");
-                    $("#otpDisplay").show().text(data.otp);
+                    $("#tripStatus").html("Driver has arrived.");
+                    break;
+                case "OTP_REQUESTED":
+                    $("#tripStatus").html("Driver has requested verification. Show this OTP to the driver:");
+                    if (data.otp) {
+                        $("#otpDisplay").show().text(data.otp);
+                        console.log("OTP received and displayed:", data.otp); // Log OTP for debugging
+                    } else {
+                        console.error("OTP was requested but no OTP value was received"); // Log error
+                    }
+                    break;
+                case "PICKEDUP":
+                    $("#tripStatus").html("You've been picked up. Enjoy your ride!");
+                    $("#otpDisplay").hide();
                     break;
                 case "COMPLETED":
-                    $("#tripStatus").html("Trip completed.");
+                    $("#tripStatus").html("Trip completed. Thank you for riding with us!");
                     $("#otpDisplay").hide();
                     clearRouteAndMarkers();
                     break;
@@ -708,11 +867,74 @@
             dropLatLng = null;
         }
         
+        // Set pickup location from map click
+        function setPickupLocation(latLng) {
+            pickupLatLng = {
+                lat: latLng.lat(),
+                lng: latLng.lng()
+            };
+            
+            // Update marker
+            pickupMarker.setPosition(latLng);
+            pickupMarker.setVisible(true);
+            
+            // Reverse geocode the coordinates
+            const geocoder = new google.maps.Geocoder();
+            geocoder.geocode({ location: latLng }, (results, status) => {
+                if (status === "OK" && results[0]) {
+                    $("#pickupAddress").val(results[0].formatted_address);
+                    
+                    // If drop location is also set, draw route
+                    if (dropLatLng) {
+                        drawRoute();
+                    }
+                    
+                    // Adjust map bounds
+                    adjustMapBounds();
+                } else {
+                    console.error("Geocoder failed due to: " + status);
+                    $("#pickupAddress").val(`${latLng.lat().toFixed(6)}, ${latLng.lng().toFixed(6)}`);
+                }
+            });
+        }
+        
+        // Set drop location from map click
+        function setDropLocation(latLng) {
+            dropLatLng = {
+                lat: latLng.lat(),
+                lng: latLng.lng()
+            };
+            
+            // Update marker
+            dropMarker.setPosition(latLng);
+            dropMarker.setVisible(true);
+            
+            // Reverse geocode the coordinates
+            const geocoder = new google.maps.Geocoder();
+            geocoder.geocode({ location: latLng }, (results, status) => {
+                if (status === "OK" && results[0]) {
+                    $("#dropAddress").val(results[0].formatted_address);
+                    
+                    // If pickup location is also set, draw route
+                    if (pickupLatLng) {
+                        drawRoute();
+                    }
+                    
+                    // Adjust map bounds
+                    adjustMapBounds();
+                } else {
+                    console.error("Geocoder failed due to: " + status);
+                    $("#dropAddress").val(`${latLng.lat().toFixed(6)}, ${latLng.lng().toFixed(6)}`);
+                }
+            });
+        }
+        
         // Event listeners
         $(document).ready(function() {
             $("#connectBtn").click(connect);
             $("#disconnectBtn").click(disconnect);
             $("#requestTripBtn").click(requestTrip);
+            $("#scheduleRideBtn").click(scheduleRide);
             
             // Handle page unload
             $(window).on('beforeunload', function() {

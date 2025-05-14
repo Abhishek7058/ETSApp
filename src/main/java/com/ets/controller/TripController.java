@@ -56,6 +56,14 @@ public class TripController {
         }
     }
     
+    @PostMapping("/send-otp")
+    public ResponseEntity<?> sendOtpToUser(@RequestBody OtpVerifyRequest request) {
+        locationTrackingService.sendOtpToUser(
+                request.getSlotId(), request.getUserId(), request.getDriverId());
+        
+        return ResponseEntity.ok(Map.of("status", "success", "message", "OTP sent to user"));
+    }
+    
     @Data
     private static class OtpVerifyRequest {
         private String slotId;

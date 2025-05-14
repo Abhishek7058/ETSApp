@@ -28,10 +28,15 @@ public class TripRequest {
     private double dropLongitude;
     private String dropAddress;
     
-    private String status; // REQUESTED, ACCEPTED, ARRIVED, COMPLETED, CANCELLED
+    private String status; // REQUESTED, ACCEPTED, ARRIVED, PICKEDUP, COMPLETED, CANCELLED
     
     private String otp;
     private boolean otpVerified = false;
     
     private Long requestTimestamp;
+    private Long pickupTimestamp;
+    private Long dropTimestamp;
+    
+    private String rideType = "INSTANT"; // INSTANT, SCHEDULED
+    private String scheduledTime;
 } 

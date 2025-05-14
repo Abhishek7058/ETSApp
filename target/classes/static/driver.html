@@ -103,7 +103,8 @@
                             <label for="otpValue">OTP:</label>
                             <input type="text" class="form-control" id="otpValue" placeholder="Enter OTP">
                         </div>
-                        <button id="verifyOtpBtn" class="btn btn-success" disabled>Verify OTP</button>
+                        <button id="sendOtpBtn" class="btn btn-primary" disabled>Send OTP to User</button>
+                        <button id="verifyOtpBtn" class="btn btn-success ml-2" disabled>Verify OTP</button>
                         <div id="otpStatus" class="mt-2"></div>
                     </div>
                 </div>
@@ -111,17 +112,32 @@
             
             <div class="col-md-5">
                 <div id="map"></div>
-                <div class="card mt-2">
+                <div class="card mt-2 mb-2">
                     <div class="card-body">
                         <div class="d-flex justify-content-between">
                             <div>
-                                <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/green-dot.png" width="20" /> You</span>
+                                <span class="mr-2"><img src="https://maps.google.com/mapfiles/ms/icons/cabs.png" width="20" /> You (Driver)</span>
                                 <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/blue-dot.png" width="20" /> Users</span>
                             </div>
                             <div>
                                 <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/red-dot.png" width="20" /> Pickup</span>
                                 <span class="mr-2"><img src="http://maps.google.com/mapfiles/ms/icons/purple-dot.png" width="20" /> Drop</span>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Trip Information Panel -->
+                <div class="card mb-2">
+                    <div class="card-header">
+                        <h5>Trip Information</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="tripInfo">
+                            <p><strong>Current Location:</strong> <span id="currentLocationText">-</span></p>
+                            <p><strong>Distance to Pickup:</strong> <span id="distanceToPickup">-</span></p>
+                            <p><strong>Trip Distance:</strong> <span id="tripDistance">-</span></p>
+                            <p><strong>Estimated Time:</strong> <span id="estimatedTime">-</span></p>
                         </div>
                     </div>
                 </div>
@@ -159,6 +175,9 @@
         let currentLat = 0;
         let currentLng = 0;
         
+        // Global variables
+        let tripInfoInterval = null;
+        
         // Initialize Google Maps
         function initMap() {
             // Default position (will be updated with current location)
@@ -174,7 +193,7 @@
                 position: defaultPosition,
                 map: map,
                 title: "Your Location",
-                icon: "http://maps.google.com/mapfiles/ms/icons/green-dot.png"
+                icon: "https://maps.google.com/mapfiles/ms/icons/cabs.png"
             });
             
             // Get current position
@@ -219,6 +238,7 @@
                 $("#connectBtn").prop("disabled", true);
                 $("#disconnectBtn").prop("disabled", false);
                 $("#verifyOtpBtn").prop("disabled", false);
+                $("#sendOtpBtn").prop("disabled", false);
                 
                 // Update connection status
                 updateConnectionStatus(true);
@@ -267,6 +287,7 @@
                     $("#connectBtn").prop("disabled", false);
                     $("#disconnectBtn").prop("disabled", true);
                     $("#verifyOtpBtn").prop("disabled", true);
+                    $("#sendOtpBtn").prop("disabled", true);
                     
                     // Update connection status
                     updateConnectionStatus(false);
@@ -294,6 +315,7 @@
                 stompClient.send("/app/location.update", {}, JSON.stringify({
                     slotId: slotId,
                     driverId: driverId,
+                    userId: null,  // Explicitly set to null to ensure it's included in the message
                     latitude: currentLat,
                     longitude: currentLng,
                     timestamp: Date.now(),
@@ -336,17 +358,68 @@
                 }),
                 success: function(response) {
                     $("#otpStatus").html('<div class="alert alert-success">OTP verified successfully</div>');
-                    updateTripStatus(userId, "COMPLETED");
+                    updateTripStatus(userId, "PICKEDUP");
                     
                     // Clear the form
                     $("#otpUserId").val("");
                     $("#otpValue").val("");
-                    
-                    // Remove trip markers
-                    removeTripMarkers(slotId + "-" + userId);
                 },
                 error: function() {
                     $("#otpStatus").html('<div class="alert alert-danger">Invalid OTP</div>');
+                }
+            });
+        }
+        
+        // Send OTP to user
+        function sendOTPToUser() {
+            const userId = $("#otpUserId").val().trim();
+            
+            if (!userId) {
+                alert("Please enter User ID");
+                return;
+            }
+            
+            // Find active trip for this user
+            let tripFound = false;
+            for (const tripId in activeTrips) {
+                const trip = activeTrips[tripId];
+                if (trip.userId === userId) {
+                    tripFound = true;
+                    break;
+                }
+            }
+            
+            if (!tripFound) {
+                $("#otpStatus").html('<div class="alert alert-warning">No active trip found for this user</div>');
+                return;
+            }
+            
+            // Call the REST API to send OTP
+            $.ajax({
+                url: "/api/trips/send-otp",
+                type: "POST",
+                contentType: "application/json",
+                data: JSON.stringify({
+                    slotId: slotId,
+                    userId: userId,
+                    driverId: driverId
+                }),
+                success: function(response) {
+                    console.log("OTP sent successfully:", response);
+                    $("#otpStatus").html('<div class="alert alert-success">OTP sent to user successfully</div>');
+                    
+                    // Also update trip status to ARRIVED if not already
+                    for (const tripId in activeTrips) {
+                        const trip = activeTrips[tripId];
+                        if (trip.userId === userId && trip.status !== "ARRIVED") {
+                            updateTripStatus(userId, "ARRIVED");
+                            break;
+                        }
+                    }
+                },
+                error: function(xhr, status, error) {
+                    console.error("Failed to send OTP:", error, xhr.responseText);
+                    $("#otpStatus").html('<div class="alert alert-danger">Failed to send OTP</div>');
                 }
             });
         }
@@ -362,6 +435,17 @@
                         // Update driver marker on map
                         const pos = { lat: currentLat, lng: currentLng };
                         driverMarker.setPosition(pos);
+                        
+                        // Update current location text
+                        updateCurrentLocationText(currentLat, currentLng);
+                        
+                        // Update distance to pickup for active trips
+                        for (const tripId in activeTrips) {
+                            const trip = activeTrips[tripId];
+                            if (trip.status === "ACCEPTED" || trip.status === "ARRIVED") {
+                                updateDistanceToPickup(trip.pickupLatitude, trip.pickupLongitude);
+                            }
+                        }
                         
                         // Send location update
                         sendLocationUpdate();
@@ -413,9 +497,12 @@
         function handleLocationMessages(message) {
             const data = JSON.parse(message.body);
             
+            console.log("Location message received:", data);
+            
             if (data.messageType === "LOCATION_UPDATE") {
                 // If it's a user location update
                 if (data.userId) {
+                    console.log("User location update received, userId:", data.userId);
                     updateUserMarker(data.userId, data.latitude, data.longitude);
                 }
             }
@@ -434,6 +521,11 @@
                 } else if (data.status === "CANCELLED" || data.status === "COMPLETED") {
                     // Remove trip markers if cancelled or completed
                     removeTripMarkers(data.slotId + "-" + data.userId);
+                }
+                
+                // Update trip information display
+                if (data.status === "ACCEPTED" || data.status === "ARRIVED" || data.status === "PICKEDUP") {
+                    updateTripInfoDisplay(data);
                 }
             }
         }
@@ -460,6 +552,11 @@
                 } else if (data.status === "CANCELLED" || data.status === "COMPLETED") {
                     // Remove trip markers if cancelled or completed
                     removeTripMarkers(data.slotId + "-" + data.userId);
+                }
+                
+                // Update trip information display
+                if (data.status === "ACCEPTED" || data.status === "ARRIVED" || data.status === "PICKEDUP") {
+                    updateTripInfoDisplay(data);
                 }
             }
         }
@@ -584,11 +681,66 @@
                 (response, status) => {
                     if (status === "OK") {
                         directionsRenderer.setDirections(response);
+                        
+                        // Update trip info with route details
+                        const route = response.routes[0];
+                        const leg = route.legs[0];
+                        
+                        // Calculate trip distance and time
+                        const tripDistanceText = leg.distance.text;
+                        const tripTimeText = leg.duration.text;
+                        
+                        // Update trip info panel
+                        $("#tripDistance").text(tripDistanceText);
+                        $("#estimatedTime").text(tripTimeText);
                     } else {
                         console.error("Directions request failed due to " + status);
                     }
                 }
             );
+            
+            // Calculate distance from driver to pickup
+            updateDistanceToPickup(trip.pickupLatitude, trip.pickupLongitude);
+        }
+        
+        // Update distance to pickup
+        function updateDistanceToPickup(pickupLat, pickupLng) {
+            if (!pickupLat || !pickupLng) return;
+            
+            const driverPos = driverMarker.getPosition();
+            const pickupPos = new google.maps.LatLng(pickupLat, pickupLng);
+            
+            const directionsService = new google.maps.DirectionsService();
+            directionsService.route(
+                {
+                    origin: driverPos,
+                    destination: pickupPos,
+                    travelMode: google.maps.TravelMode.DRIVING
+                },
+                (response, status) => {
+                    if (status === "OK") {
+                        const route = response.routes[0];
+                        const leg = route.legs[0];
+                        
+                        // Update trip info with distance to pickup
+                        $("#distanceToPickup").text(leg.distance.text + " (" + leg.duration.text + ")");
+                    }
+                }
+            );
+        }
+        
+        // Update current location text with geocoded address
+        function updateCurrentLocationText(lat, lng) {
+            const geocoder = new google.maps.Geocoder();
+            const latlng = { lat: lat, lng: lng };
+            
+            geocoder.geocode({ location: latlng }, (results, status) => {
+                if (status === "OK" && results[0]) {
+                    $("#currentLocationText").text(results[0].formatted_address);
+                } else {
+                    $("#currentLocationText").text(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+                }
+            });
         }
         
         // Remove trip markers from the map
@@ -688,9 +840,16 @@
                     statusClass = 'accepted';
                 } else if (trip.status === "ARRIVED") {
                     actionButtons = `
+                        <button class="btn btn-sm btn-success pickupTrip" data-userid="${trip.userId}">Picked Up</button>
                         <button class="btn btn-sm btn-info showTrip" data-tripid="${tripId}">Show Route</button>
                     `;
                     statusClass = 'arrived';
+                } else if (trip.status === "PICKEDUP") {
+                    actionButtons = `
+                        <button class="btn btn-sm btn-danger dropTrip" data-userid="${trip.userId}">Dropped</button>
+                        <button class="btn btn-sm btn-info showTrip" data-tripid="${tripId}">Show Route</button>
+                    `;
+                    statusClass = 'pickedup';
                 }
                 
                 $tripsList.append(`
@@ -698,8 +857,11 @@
                         <div class="card-body">
                             <h5 class="card-title">Trip Request: User ${trip.userId}</h5>
                             <p><strong>Status:</strong> ${trip.status}</p>
-                            <p><strong>Pickup:</strong> ${trip.pickupAddress}</p>
-                            <p><strong>Drop:</strong> ${trip.dropAddress}</p>
+                            <p><strong>Pickup:</strong> ${trip.pickupAddress || 'Not specified'}</p>
+                            <p><strong>Drop:</strong> ${trip.dropAddress || 'Not specified'}</p>
+                            ${trip.rideType === "SCHEDULED" ? `<p><strong>Scheduled Time:</strong> ${new Date(trip.scheduledTime).toLocaleString()}</p>` : ''}
+                            ${trip.requestTimestamp ? `<p><strong>Requested:</strong> ${new Date(trip.requestTimestamp).toLocaleTimeString()}</p>` : ''}
+                            ${trip.pickupTimestamp ? `<p><strong>Picked up:</strong> ${new Date(trip.pickupTimestamp).toLocaleTimeString()}</p>` : ''}
                             <div class="btn-group">${actionButtons}</div>
                         </div>
                     </div>
@@ -730,6 +892,20 @@
                 $("#otpUserId").val(userId);
             });
             
+            $(".pickupTrip").click(function() {
+                const userId = $(this).data("userid");
+                updateTripStatus(userId, "PICKEDUP");
+            });
+            
+            $(".dropTrip").click(function() {
+                const userId = $(this).data("userid");
+                updateTripStatus(userId, "COMPLETED");
+                
+                // Remove trip markers and the user marker
+                removeTripMarkers(slotId + "-" + userId);
+                removeUserMarker(userId);
+            });
+            
             $(".showTrip").click(function() {
                 const tripId = $(this).data("tripid");
                 const trip = activeTrips[tripId];
@@ -740,11 +916,46 @@
             });
         }
         
+        // Format time difference in a human-readable way
+        function formatTimeDifference(startTime, endTime) {
+            if (!startTime || !endTime) return "N/A";
+            
+            const diffMs = endTime - startTime;
+            const minutes = Math.floor(diffMs / 60000);
+            const seconds = Math.floor((diffMs % 60000) / 1000);
+            
+            return `${minutes}m ${seconds}s`;
+        }
+        
+        // Update trip information display
+        function updateTripInfoDisplay(tripData) {
+            if (tripData.pickupTimestamp && tripData.status === "PICKEDUP") {
+                const now = Date.now();
+                const pickupTime = tripData.pickupTimestamp;
+                const elapsed = formatTimeDifference(pickupTime, now);
+                
+                $("#tripInfo").html(`
+                    <p><strong>Current Location:</strong> <span id="currentLocationText">-</span></p>
+                    <p><strong>Trip Duration:</strong> ${elapsed}</p>
+                    <p><strong>Trip Distance:</strong> <span id="tripDistance">${$("#tripDistance").text()}</span></p>
+                    <p><strong>Estimated Time:</strong> <span id="estimatedTime">${$("#estimatedTime").text()}</span></p>
+                `);
+                
+                // Update every second
+                if (window.tripInfoInterval) clearInterval(window.tripInfoInterval);
+                window.tripInfoInterval = setInterval(() => {
+                    const newElapsed = formatTimeDifference(pickupTime, Date.now());
+                    $("p:contains('Trip Duration')").html(`<strong>Trip Duration:</strong> ${newElapsed}`);
+                }, 1000);
+            }
+        }
+        
         // Event listeners
         $(document).ready(function() {
             $("#connectBtn").click(connect);
             $("#disconnectBtn").click(disconnect);
             $("#verifyOtpBtn").click(verifyOTP);
+            $("#sendOtpBtn").click(sendOTPToUser);
             
             // Handle page unload
             $(window).on('beforeunload', function() {
@@ -752,6 +963,6 @@
             });
         });
     </script>
-        <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCelDo4I5cPQ72TfCTQW-arhPZ7ALNcp8w&libraries=places,geometry&callback=initMap" async defer></script>
-    </body>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCelDo4I5cPQ72TfCTQW-arhPZ7ALNcp8w&libraries=places,geometry&callback=initMap" async defer></script>
+</body>
 </html> 

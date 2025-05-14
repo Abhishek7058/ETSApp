@@ -128,24 +128,29 @@ public class LocationTrackingService {
     
     public void handleLocationUpdate(LocationMessage locationMessage) {
         String slotId = locationMessage.getSlotId();
+        String userId = locationMessage.getUserId();
+        String driverId = locationMessage.getDriverId();
         
         // If it's a driver location update, send to all users in the slot
-        if (locationMessage.getDriverId() != null) {
+        if (driverId != null && !driverId.isEmpty()) {
             Map<String, Boolean> users = slotUserMap.getOrDefault(slotId, new HashMap<>());
-            for (String userId : users.keySet()) {
-                messagingTemplate.convertAndSendToUser(userId, "/queue/location", locationMessage);
+            for (String user : users.keySet()) {
+                // Ensure we're passing the same message with all fields intact
+                messagingTemplate.convertAndSendToUser(user, "/queue/location", locationMessage);
             }
         }
         
         // If it's a user location update, send to the driver of the slot
-        if (locationMessage.getUserId() != null) {
-            String driverId = slotDriverMap.get(slotId);
-            if (driverId != null) {
-                messagingTemplate.convertAndSendToUser(driverId, "/queue/location", locationMessage);
+        if (userId != null && !userId.isEmpty()) {
+            String driver = slotDriverMap.get(slotId);
+            if (driver != null) {
+                // Ensure we're passing the same message with all fields intact
+                messagingTemplate.convertAndSendToUser(driver, "/queue/location", locationMessage);
             }
         }
         
         // Also broadcast to the slot topic for all subscribers
+        // No need to modify the original message - just broadcast it as is
         messagingTemplate.convertAndSend("/topic/slot/" + slotId + "/location", locationMessage);
     }
     
@@ -169,9 +174,18 @@ public class LocationTrackingService {
             tripRequest.setStatus("REQUESTED");
             tripRequest.setRequestTimestamp(System.currentTimeMillis());
             
+            // Set ride type and scheduled time if provided
+            if (tripMessage.getRideType() != null) {
+                tripRequest.setRideType(tripMessage.getRideType());
+            }
+            if (tripMessage.getScheduledTime() != null) {
+                tripRequest.setScheduledTime(tripMessage.getScheduledTime());
+            }
+            
             tripRequestRepository.save(tripRequest);
             
             tripMessage.setStatus("REQUESTED");
+            tripMessage.setRequestTimestamp(tripRequest.getRequestTimestamp());
             
             // Send to driver
             messagingTemplate.convertAndSendToUser(driverId, "/queue/trips", tripMessage);
@@ -202,7 +216,26 @@ public class LocationTrackingService {
                     tripMessage.setOtp(otp);
                 }
                 
+                // Handle other status changes
+                if (tripMessage.getStatus().equals("PICKEDUP")) {
+                    trip.setPickupTimestamp(System.currentTimeMillis());
+                    tripMessage.setPickupTimestamp(trip.getPickupTimestamp());
+                } else if (tripMessage.getStatus().equals("COMPLETED")) {
+                    trip.setDropTimestamp(System.currentTimeMillis());
+                    tripMessage.setDropTimestamp(trip.getDropTimestamp());
+                }
+                
                 tripRequestRepository.save(trip);
+                
+                // Set other trip properties to include in the message
+                tripMessage.setPickupAddress(trip.getPickupAddress());
+                tripMessage.setDropAddress(trip.getDropAddress());
+                tripMessage.setPickupLatitude(trip.getPickupLatitude());
+                tripMessage.setPickupLongitude(trip.getPickupLongitude());
+                tripMessage.setDropLatitude(trip.getDropLatitude());
+                tripMessage.setDropLongitude(trip.getDropLongitude());
+                tripMessage.setRequestTimestamp(trip.getRequestTimestamp());
+                
                 break;
             }
         }
@@ -240,6 +273,33 @@ public class LocationTrackingService {
             }
         }
         return false;
+    }
+    
+    public void sendOtpToUser(String slotId, String userId, String driverId) {
+        List<TripRequest> tripRequests = tripRequestRepository.findBySlotId(slotId);
+        for (TripRequest trip : tripRequests) {
+            if (trip.getUserId().equals(userId) && trip.getDriverId().equals(driverId)) {
+                String otp = trip.getOtp();
+                if (otp == null || otp.isEmpty()) {
+                    // Generate new OTP if not exists
+                    otp = generateOTP();
+                    trip.setOtp(otp);
+                    tripRequestRepository.save(trip);
+                }
+                
+                // Send OTP to user
+                TripMessage tripMessage = new TripMessage();
+                tripMessage.setSlotId(slotId);
+                tripMessage.setUserId(userId);
+                tripMessage.setDriverId(driverId);
+                tripMessage.setStatus("OTP_REQUESTED");
+                tripMessage.setOtp(otp);
+                
+                messagingTemplate.convertAndSendToUser(userId, "/queue/trips", tripMessage);
+                
+                return;
+            }
+        }
     }
     
     private String generateOTP() {
