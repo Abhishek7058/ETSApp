@@ -230,6 +230,11 @@
             const socket = new SockJS('/ws');
             stompClient = Stomp.over(socket);
             
+            // Enable debug mode to see WebSocket communication
+            stompClient.debug = function(str) {
+                console.log('STOMP: ' + str);
+            };
+            
             stompClient.connect({}, function(frame) {
                 console.log('Connected: ' + frame);
                 connected = true;
@@ -247,8 +252,13 @@
                 stompClient.subscribe('/topic/slot/' + slotId, handleSlotMessages);
                 stompClient.subscribe('/topic/slot/' + slotId + '/location', handleLocationMessages);
                 stompClient.subscribe('/topic/slot/' + slotId + '/trips', handleTripMessages);
-                stompClient.subscribe('/user/queue/location', handleUserLocation);
-                stompClient.subscribe('/user/queue/trips', handleTripUpdates);
+                
+                // Important: Subscribe to driver-specific destinations
+                const driverQueue = '/user/' + driverId + '/queue';
+                stompClient.subscribe(driverQueue + '/location', handleUserLocation);
+                stompClient.subscribe(driverQueue + '/trips', handleTripUpdates);
+                
+                console.log('Subscribed to driver-specific queue: ' + driverQueue);
                 
                 // Send connection message
                 sendConnectionMessage("CONNECTED");
@@ -315,7 +325,6 @@
                 stompClient.send("/app/location.update", {}, JSON.stringify({
                     slotId: slotId,
                     driverId: driverId,
-                    userId: null,  // Explicitly set to null to ensure it's included in the message
                     latitude: currentLat,
                     longitude: currentLng,
                     timestamp: Date.now(),
@@ -345,6 +354,23 @@
                 return;
             }
             
+            // Check if this user has an active trip
+            let tripFound = false;
+            for (const tripId in activeTrips) {
+                const trip = activeTrips[tripId];
+                if (trip.userId === userId) {
+                    tripFound = true;
+                    break;
+                }
+            }
+            
+            if (!tripFound) {
+                $("#otpStatus").html('<div class="alert alert-warning">No active trip found for this user</div>');
+                return;
+            }
+            
+            console.log("Verifying OTP for user:", userId, "OTP:", otp);
+            
             // Call the REST API to verify OTP
             $.ajax({
                 url: "/api/trips/verify-otp",
@@ -357,15 +383,28 @@
                     otp: otp
                 }),
                 success: function(response) {
+                    console.log("OTP verified successfully:", response);
                     $("#otpStatus").html('<div class="alert alert-success">OTP verified successfully</div>');
+                    
+                    // Update trip status to PICKEDUP
                     updateTripStatus(userId, "PICKEDUP");
                     
                     // Clear the form
                     $("#otpUserId").val("");
                     $("#otpValue").val("");
                 },
-                error: function() {
-                    $("#otpStatus").html('<div class="alert alert-danger">Invalid OTP</div>');
+                error: function(xhr, status, error) {
+                    console.error("Failed to verify OTP:", error, xhr.responseText);
+                    let errorMessage = "Invalid OTP";
+                    try {
+                        const errorResponse = JSON.parse(xhr.responseText);
+                        if (errorResponse && errorResponse.message) {
+                            errorMessage = errorResponse.message;
+                        }
+                    } catch (e) {
+                        console.error("Error parsing error response:", e);
+                    }
+                    $("#otpStatus").html('<div class="alert alert-danger">' + errorMessage + '</div>');
                 }
             });
         }
@@ -394,6 +433,11 @@
                 return;
             }
             
+            // Generate a 6-digit OTP
+            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            
+            console.log("Sending OTP to user:", userId, "OTP:", otp);
+            
             // Call the REST API to send OTP
             $.ajax({
                 url: "/api/trips/send-otp",
@@ -402,11 +446,18 @@
                 data: JSON.stringify({
                     slotId: slotId,
                     userId: userId,
-                    driverId: driverId
+                    driverId: driverId,
+                    otp: otp // Include the OTP in the request
                 }),
                 success: function(response) {
                     console.log("OTP sent successfully:", response);
                     $("#otpStatus").html('<div class="alert alert-success">OTP sent to user successfully</div>');
+                    
+                    // Display the OTP in the driver's interface as well for verification
+                    $("#otpStatus").append('<div class="alert alert-info mt-2">Generated OTP: <strong>' + otp + '</strong></div>');
+                    
+                    // Auto-fill the OTP field for convenience
+                    $("#otpValue").val(otp);
                     
                     // Also update trip status to ARRIVED if not already
                     for (const tripId in activeTrips) {
@@ -416,10 +467,22 @@
                             break;
                         }
                     }
+                    
+                    // Also directly update the trip status to OTP_REQUESTED
+                    updateTripStatus(userId, "OTP_REQUESTED");
                 },
                 error: function(xhr, status, error) {
                     console.error("Failed to send OTP:", error, xhr.responseText);
-                    $("#otpStatus").html('<div class="alert alert-danger">Failed to send OTP</div>');
+                    let errorMessage = "Failed to send OTP";
+                    try {
+                        const errorResponse = JSON.parse(xhr.responseText);
+                        if (errorResponse && errorResponse.message) {
+                            errorMessage = errorResponse.message;
+                        }
+                    } catch (e) {
+                        console.error("Error parsing error response:", e);
+                    }
+                    $("#otpStatus").html('<div class="alert alert-danger">' + errorMessage + '</div>');
                 }
             });
         }
@@ -497,12 +560,9 @@
         function handleLocationMessages(message) {
             const data = JSON.parse(message.body);
             
-            console.log("Location message received:", data);
-            
             if (data.messageType === "LOCATION_UPDATE") {
                 // If it's a user location update
                 if (data.userId) {
-                    console.log("User location update received, userId:", data.userId);
                     updateUserMarker(data.userId, data.latitude, data.longitude);
                 }
             }

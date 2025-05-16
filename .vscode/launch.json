@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Spring Boot-Application<location-tracking>",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "mainClass": "com.ets.Application",
+            "projectName": "location-tracking",
+            "args": "",
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}

@@ -29,11 +29,37 @@
             font-size: 24px;
             font-weight: bold;
             background-color: #f8f9fa;
-            padding: 10px;
+            padding: 15px;
             border-radius: 5px;
             margin: 10px 0;
+            text-align: center;
+            letter-spacing: 5px;
             display: none;
+            border: 2px dashed #007bff;
+            color: #007bff;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
         }
+        
+        /* Pulse animation for OTP display */
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(0, 123, 255, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(0, 123, 255, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(0, 123, 255, 0);
+            }
+        }
+        
+        /* Highlight class for OTP display */
+        .otp-highlight {
+            animation: pulse 2s infinite;
+            background-color: #e3f2fd;
+            border: 2px solid #007bff;
+        }
+        
         .pac-container {
             z-index: 1051 !important;
         }
@@ -45,6 +71,66 @@
             color: #721c24;
             border-radius: 5px;
             margin-bottom: 20px;
+        }
+        .ride-status {
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin-top: 15px;
+            background-color: #f8f9fa;
+            border-left: 4px solid #007bff;
+        }
+        .status-heading {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .trip-info {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            margin-top: 15px;
+        }
+        .trip-info-item {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            flex-basis: 48%;
+            border-left: 3px solid #28a745;
+        }
+        .trip-info-item h5 {
+            margin: 0;
+            font-size: 14px;
+            color: #6c757d;
+        }
+        .trip-info-item p {
+            margin: 5px 0 0 0;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        @media (max-width: 768px) {
+            .trip-info-item {
+                flex-basis: 100%;
+            }
+        }
+        #slotUsers {
+            margin-top: 10px;
+        }
+        .slot-user {
+            display: inline-block;
+            margin-right: 10px;
+            margin-bottom: 10px;
+            padding: 4px 8px;
+            background-color: #f8f9fa;
+            border-radius: 15px;
+            border: 1px solid #dee2e6;
+            font-size: 12px;
+        }
+        .slot-user.current {
+            background-color: #e3f2fd;
+            border-color: #b3d7ff;
+        }
+        .trip-status-alert {
+            margin-top: 15px;
         }
     </style>
 </head>
@@ -69,6 +155,8 @@
                 <button id="disconnectBtn" class="btn btn-danger" disabled>Disconnect</button>
                 
                 <div id="driverStatus" class="online-status offline">Driver Offline</div>
+                
+                <div id="slotUsers" class="mt-2"></div>
             </div>
         </div>
         
@@ -116,8 +204,12 @@
                     </div>
                 </div>
                 
-                <div id="tripStatus" class="mt-3"></div>
+                <div id="tripStatus" class="ride-status mt-3" style="display: none;"></div>
                 <div id="otpDisplay" class="otp-display"></div>
+                
+                <div class="trip-info" id="tripInfo" style="display: none;">
+                    <!-- Trip info will be dynamically added here -->
+                </div>
             </div>
         </div>
         
@@ -508,6 +600,11 @@
             const socket = new SockJS('/ws');
             stompClient = Stomp.over(socket);
             
+            // Enable debug mode to see WebSocket communication
+            stompClient.debug = function(str) {
+                console.log('STOMP: ' + str);
+            };
+            
             stompClient.connect({}, function(frame) {
                 console.log('Connected: ' + frame);
                 connected = true;
@@ -522,9 +619,14 @@
                 stompClient.subscribe('/topic/slot/' + slotId, handleSlotMessages);
                 stompClient.subscribe('/topic/slot/' + slotId + '/location', handleLocationMessages);
                 stompClient.subscribe('/topic/slot/' + slotId + '/trips', handleTripMessages);
-                stompClient.subscribe('/user/queue/notifications', handleNotifications);
-                stompClient.subscribe('/user/queue/location', handleDriverLocation);
-                stompClient.subscribe('/user/queue/trips', handleTripUpdates);
+                
+                // Important: Subscribe to user-specific destinations
+                const userQueue = '/user/' + userId + '/queue';
+                stompClient.subscribe(userQueue + '/notifications', handleNotifications);
+                stompClient.subscribe(userQueue + '/location', handleDriverLocation);
+                stompClient.subscribe(userQueue + '/trips', handleTripUpdates);
+                
+                console.log('Subscribed to user-specific queue: ' + userQueue);
                 
                 // Send connection message
                 sendConnectionMessage("CONNECTED");
@@ -572,6 +674,11 @@
                 status: status,
                 messageType: "CONNECTION_UPDATE"
             }));
+            
+            // Update slot users after connection
+            if (status === "CONNECTED") {
+                updateSlotUsers();
+            }
         }
         
         // Send location update
@@ -580,7 +687,6 @@
                 stompClient.send("/app/location.update", {}, JSON.stringify({
                     slotId: slotId,
                     userId: userId,
-                    driverId: null,  // Explicitly set to null to ensure it's included in the message
                     latitude: currentLat,
                     longitude: currentLng,
                     timestamp: Date.now(),
@@ -618,7 +724,36 @@
                 messageType: "TRIP_UPDATE"
             }));
             
-            $("#tripStatus").html("Trip requested. Waiting for driver...");
+            // Immediately update trip status and show trip info
+            $("#tripStatus").show().html(`
+                <div class="status-heading">TRIP STATUS:</div>
+                <div class="alert alert-info trip-status-alert">
+                    Trip requested. Waiting for driver...
+                </div>
+            `);
+            
+            // Initialize and show trip info
+            $("#tripInfo").html(`
+                <div class="trip-info-item">
+                    <h5>PICKUP</h5>
+                    <p id="tripPickup">${pickupAddress}</p>
+                </div>
+                <div class="trip-info-item">
+                    <h5>DROP</h5>
+                    <p id="tripDrop">${dropAddress}</p>
+                </div>
+                <div class="trip-info-item">
+                    <h5>DISTANCE</h5>
+                    <p id="tripDistance">Calculating...</p>
+                </div>
+                <div class="trip-info-item">
+                    <h5>ESTIMATED TIME</h5>
+                    <p id="tripEta">Calculating...</p>
+                </div>
+            `).show();
+            
+            // Calculate and display trip metrics
+            updateTripMetrics(pickupLat, pickupLng, dropLat, dropLng);
         }
         
         // Schedule a ride
@@ -719,6 +854,9 @@
                 if (data.driverId) {
                     updateDriverStatus(data.status === "CONNECTED");
                 }
+                
+                // Update the list of users in this slot
+                updateSlotUsers();
             }
         }
         
@@ -726,12 +864,9 @@
         function handleLocationMessages(message) {
             const data = JSON.parse(message.body);
             
-            console.log("Location message received:", data); // Add logging
-            
             if (data.messageType === "LOCATION_UPDATE") {
                 // If it's a driver location update
                 if (data.driverId) {
-                    console.log("Driver location update received, driverId:", data.driverId);
                     updateDriverMarker(data.latitude, data.longitude);
                 }
             }
@@ -770,11 +905,40 @@
         function handleTripUpdates(message) {
             const data = JSON.parse(message.body);
             
-            console.log("Trip update received:", data); // Add logging to help debug
+            console.log("Trip update received:", data); // Log all incoming trip messages
             
-            if (data.messageType === "TRIP_UPDATE" || data.status === "OTP_REQUESTED") {
-                updateTripStatus(data);
+            // Ensure we only process messages meant for this user
+            if (data.userId && data.userId !== userId) {
+                console.log("Ignored trip update for different user:", data.userId);
+                return;
             }
+
+            // Check specifically for OTP in the message
+            if (data.otp) {
+                console.log("OTP found in trip update:", data.otp);
+                
+                // Always display the OTP if it exists, regardless of status
+                $("#otpDisplay").show().text(data.otp);
+                
+                // If the message doesn't explicitly set a status that would trigger
+                // OTP display in updateTripStatus, force a status that will
+                if (data.status !== "OTP_REQUESTED" && data.status !== "ARRIVED") {
+                    console.log("Forcing OTP display for status:", data.status);
+                    // Create a copy of the data with modified status to ensure OTP display
+                    const modifiedData = {...data};
+                    
+                    // Store original status to restore later if needed
+                    modifiedData._originalStatus = data.status;
+                    modifiedData.status = "OTP_REQUESTED";
+                    
+                    // Update trip status with the modified data
+                    updateTripStatus(modifiedData);
+                    return;
+                }
+            }
+
+            // Always update the trip status when we get a valid message
+            updateTripStatus(data);
         }
         
         // Update driver status indicator
@@ -804,40 +968,129 @@
         function updateTripStatus(data) {
             console.log("Updating trip status:", data); // Add logging to help debug
             
+            // Always show the trip status container when we receive an update
+            $("#tripStatus").show();
+            
+            // Initialize trip info if it doesn't exist
+            if ($("#tripInfo").children().length === 0) {
+                $("#tripInfo").html(`
+                    <div class="trip-info-item">
+                        <h5>PICKUP</h5>
+                        <p id="tripPickup">-</p>
+                    </div>
+                    <div class="trip-info-item">
+                        <h5>DROP</h5>
+                        <p id="tripDrop">-</p>
+                    </div>
+                    <div class="trip-info-item">
+                        <h5>DISTANCE</h5>
+                        <p id="tripDistance">-</p>
+                    </div>
+                    <div class="trip-info-item">
+                        <h5>ESTIMATED TIME</h5>
+                        <p id="tripEta">-</p>
+                    </div>
+                `);
+            }
+            
+            // Update pickup and drop addresses if available
+            if (data.pickupAddress) {
+                $("#tripPickup").text(data.pickupAddress);
+            }
+            
+            if (data.dropAddress) {
+                $("#tripDrop").text(data.dropAddress);
+            }
+            
+            // Show the trip info section for active trips
+            if (data.status !== "COMPLETED" && data.status !== "CANCELLED") {
+                $("#tripInfo").show();
+            } else {
+                $("#tripInfo").hide();
+            }
+            
+            // Check if OTP is present in the data
+            if (data.otp) {
+                console.log("OTP found in message:", data.otp);
+                
+                // Always show OTP if present, regardless of status
+                $("#otpDisplay").show().text(data.otp);
+                
+                // Add highlight class to draw attention to the OTP
+                $("#otpDisplay").removeClass("otp-highlight");
+                setTimeout(() => {
+                    $("#otpDisplay").addClass("otp-highlight");
+                }, 10);
+            } else {
+                console.log("No OTP found in message");
+                // Only hide OTP display if we're moving to a state where OTP is no longer needed
+                if (["OTP_VERIFIED", "PICKEDUP", "COMPLETED", "CANCELLED"].includes(data.status)) {
+                    $("#otpDisplay").hide().removeClass("otp-highlight");
+                }
+            }
+            
+            let statusMessage = "";
+            let statusClass = "alert-info";
+            
             switch (data.status) {
                 case "REQUESTED":
-                    $("#tripStatus").html("Trip requested. Waiting for driver...");
+                    statusMessage = "Trip requested. Waiting for driver...";
+                    statusClass = "alert-info";
                     break;
                 case "ACCEPTED":
-                    $("#tripStatus").html("Trip accepted by driver. Driver is on the way.");
+                    statusMessage = "Trip accepted by driver. Driver is on the way.";
+                    statusClass = "alert-success";
                     break;
                 case "ARRIVED":
-                    $("#tripStatus").html("Driver has arrived.");
-                    break;
-                case "OTP_REQUESTED":
-                    $("#tripStatus").html("Driver has requested verification. Show this OTP to the driver:");
+                    statusMessage = "Driver has arrived at your pickup location.";
+                    statusClass = "alert-warning";
+                    
+                    // Add OTP message if it exists
                     if (data.otp) {
-                        $("#otpDisplay").show().text(data.otp);
-                        console.log("OTP received and displayed:", data.otp); // Log OTP for debugging
-                    } else {
-                        console.error("OTP was requested but no OTP value was received"); // Log error
+                        statusMessage += " Show the OTP below to the driver:";
                     }
                     break;
+                case "OTP_REQUESTED":
+                    statusMessage = "Driver has requested verification. Show the OTP below to the driver:";
+                    statusClass = "alert-primary";
+                    break;
+                case "OTP_VERIFIED":
+                    statusMessage = "OTP verified successfully. You will be picked up shortly.";
+                    statusClass = "alert-success";
+                    $("#otpDisplay").hide().removeClass("otp-highlight");
+                    break;
                 case "PICKEDUP":
-                    $("#tripStatus").html("You've been picked up. Enjoy your ride!");
-                    $("#otpDisplay").hide();
+                    statusMessage = "You've been picked up. Enjoy your ride!";
+                    statusClass = "alert-success";
+                    $("#otpDisplay").hide().removeClass("otp-highlight");
                     break;
                 case "COMPLETED":
-                    $("#tripStatus").html("Trip completed. Thank you for riding with us!");
-                    $("#otpDisplay").hide();
+                    statusMessage = "Trip completed. Thank you for riding with us!";
+                    statusClass = "alert-success";
+                    $("#otpDisplay").hide().removeClass("otp-highlight");
                     clearRouteAndMarkers();
                     break;
                 case "CANCELLED":
-                    $("#tripStatus").html("Trip cancelled.");
-                    $("#otpDisplay").hide();
+                    statusMessage = "Trip cancelled.";
+                    statusClass = "alert-danger";
+                    $("#otpDisplay").hide().removeClass("otp-highlight");
                     clearRouteAndMarkers();
                     break;
+                default:
+                    // For any other status
+                    if (data.otp) {
+                        statusMessage = "OTP for verification:";
+                        statusClass = "alert-info";
+                    }
             }
+            
+            // Update the trip status with modern alert styling
+            $("#tripStatus").html(`
+                <div class="status-heading">TRIP STATUS:</div>
+                <div class="alert ${statusClass} trip-status-alert">
+                    ${statusMessage}
+                </div>
+            `);
         }
         
         // Clear route and markers from the map
@@ -927,6 +1180,64 @@
                     $("#dropAddress").val(`${latLng.lat().toFixed(6)}, ${latLng.lng().toFixed(6)}`);
                 }
             });
+        }
+        
+        // Update slot users display
+        function updateSlotUsers() {
+            if (!connected) return;
+            
+            $.ajax({
+                url: `/api/slots/${slotId}/users`,
+                type: "GET",
+                success: function(response) {
+                    const $slotUsers = $("#slotUsers");
+                    $slotUsers.empty();
+                    
+                    if (response.length > 0) {
+                        $slotUsers.append('<div class="small text-muted mb-1">Users in this slot:</div>');
+                        
+                        response.forEach(user => {
+                            const isCurrentUser = user.userId === userId;
+                            $slotUsers.append(`
+                                <span class="slot-user ${isCurrentUser ? 'current' : ''}">
+                                    ${user.userId} ${isCurrentUser ? '(you)' : ''}
+                                </span>
+                            `);
+                        });
+                    }
+                },
+                error: function(error) {
+                    console.error("Failed to get slot users:", error);
+                }
+            });
+        }
+        
+        // Update trip metrics (distance, ETA)
+        function updateTripMetrics(pickupLat, pickupLng, dropLat, dropLng) {
+            if (!directionsService) return;
+            
+            const origin = new google.maps.LatLng(pickupLat, pickupLng);
+            const destination = new google.maps.LatLng(dropLat, dropLng);
+            
+            directionsService.route(
+                {
+                    origin: origin,
+                    destination: destination,
+                    travelMode: google.maps.TravelMode.DRIVING
+                },
+                (response, status) => {
+                    if (status === "OK") {
+                        const route = response.routes[0];
+                        
+                        // Update distance and duration
+                        if (route && route.legs && route.legs[0]) {
+                            const leg = route.legs[0];
+                            $("#tripDistance").text(leg.distance.text);
+                            $("#tripEta").text(leg.duration.text);
+                        }
+                    }
+                }
+            );
         }
         
         // Event listeners

@@ -128,29 +128,24 @@ public class LocationTrackingService {
     
     public void handleLocationUpdate(LocationMessage locationMessage) {
         String slotId = locationMessage.getSlotId();
-        String userId = locationMessage.getUserId();
-        String driverId = locationMessage.getDriverId();
         
         // If it's a driver location update, send to all users in the slot
-        if (driverId != null && !driverId.isEmpty()) {
+        if (locationMessage.getDriverId() != null) {
             Map<String, Boolean> users = slotUserMap.getOrDefault(slotId, new HashMap<>());
-            for (String user : users.keySet()) {
-                // Ensure we're passing the same message with all fields intact
-                messagingTemplate.convertAndSendToUser(user, "/queue/location", locationMessage);
+            for (String userId : users.keySet()) {
+                messagingTemplate.convertAndSendToUser(userId, "/queue/location", locationMessage);
             }
         }
         
         // If it's a user location update, send to the driver of the slot
-        if (userId != null && !userId.isEmpty()) {
-            String driver = slotDriverMap.get(slotId);
-            if (driver != null) {
-                // Ensure we're passing the same message with all fields intact
-                messagingTemplate.convertAndSendToUser(driver, "/queue/location", locationMessage);
+        if (locationMessage.getUserId() != null) {
+            String driverId = slotDriverMap.get(slotId);
+            if (driverId != null) {
+                messagingTemplate.convertAndSendToUser(driverId, "/queue/location", locationMessage);
             }
         }
         
         // Also broadcast to the slot topic for all subscribers
-        // No need to modify the original message - just broadcast it as is
         messagingTemplate.convertAndSend("/topic/slot/" + slotId + "/location", locationMessage);
     }
     
@@ -254,22 +249,27 @@ public class LocationTrackingService {
         List<TripRequest> tripRequests = tripRequestRepository.findBySlotId(slotId);
         for (TripRequest trip : tripRequests) {
             if (trip.getUserId().equals(userId) && 
-                trip.getDriverId().equals(driverId) && 
-                trip.getOtp().equals(otp)) {
+                trip.getDriverId().equals(driverId)) {
                 
-                trip.setOtpVerified(true);
-                tripRequestRepository.save(trip);
-                
-                // Notify driver
-                TripMessage tripMessage = new TripMessage();
-                tripMessage.setSlotId(slotId);
-                tripMessage.setUserId(userId);
-                tripMessage.setDriverId(driverId);
-                tripMessage.setStatus("OTP_VERIFIED");
-                
-                messagingTemplate.convertAndSendToUser(driverId, "/queue/trips", tripMessage);
-                
-                return true;
+                // Check if the OTP matches
+                if (trip.getOtp() != null && trip.getOtp().equals(otp)) {
+                    trip.setOtpVerified(true);
+                    tripRequestRepository.save(trip);
+                    
+                    // Notify driver
+                    TripMessage tripMessage = new TripMessage();
+                    tripMessage.setSlotId(slotId);
+                    tripMessage.setUserId(userId);
+                    tripMessage.setDriverId(driverId);
+                    tripMessage.setStatus("OTP_VERIFIED");
+                    
+                    messagingTemplate.convertAndSendToUser(driverId, "/queue/trips", tripMessage);
+                    
+                    // Also notify the user
+                    messagingTemplate.convertAndSendToUser(userId, "/queue/trips", tripMessage);
+                    
+                    return true;
+                }
             }
         }
         return false;
@@ -279,15 +279,10 @@ public class LocationTrackingService {
         List<TripRequest> tripRequests = tripRequestRepository.findBySlotId(slotId);
         for (TripRequest trip : tripRequests) {
             if (trip.getUserId().equals(userId) && trip.getDriverId().equals(driverId)) {
+                // Always use the OTP stored in the trip
                 String otp = trip.getOtp();
-                if (otp == null || otp.isEmpty()) {
-                    // Generate new OTP if not exists
-                    otp = generateOTP();
-                    trip.setOtp(otp);
-                    tripRequestRepository.save(trip);
-                }
                 
-                // Send OTP to user
+                // Build user-specific trip message for OTP
                 TripMessage tripMessage = new TripMessage();
                 tripMessage.setSlotId(slotId);
                 tripMessage.setUserId(userId);
@@ -295,11 +290,60 @@ public class LocationTrackingService {
                 tripMessage.setStatus("OTP_REQUESTED");
                 tripMessage.setOtp(otp);
                 
+                // Also include trip details
+                tripMessage.setPickupAddress(trip.getPickupAddress());
+                tripMessage.setDropAddress(trip.getDropAddress());
+                tripMessage.setPickupLatitude(trip.getPickupLatitude());
+                tripMessage.setPickupLongitude(trip.getPickupLongitude());
+                tripMessage.setDropLatitude(trip.getDropLatitude());
+                tripMessage.setDropLongitude(trip.getDropLongitude());
+                tripMessage.setRequestTimestamp(trip.getRequestTimestamp());
+                
+                System.out.println("Sending OTP to user: " + userId + ", OTP: " + otp); // Log for debugging
+                
+                // Send directly to the specific user only
                 messagingTemplate.convertAndSendToUser(userId, "/queue/trips", tripMessage);
+                
+                // Also send via the general slot topic to ensure it's received
+                messagingTemplate.convertAndSend("/topic/slot/" + slotId + "/trips", tripMessage);
                 
                 return;
             }
         }
+    }
+    
+    /**
+     * Generate a new OTP and send it to the user, returning the generated OTP.
+     * 
+     * @param slotId the slot ID
+     * @param userId the user ID to send the OTP to
+     * @param driverId the driver ID
+     * @return the generated OTP or null if no matching trip found
+     */
+    public String generateAndSendOTP(String slotId, String userId, String driverId) {
+        List<TripRequest> tripRequests = tripRequestRepository.findBySlotId(slotId);
+        for (TripRequest trip : tripRequests) {
+            if (trip.getUserId().equals(userId) && trip.getDriverId().equals(driverId)) {
+                // Generate new OTP
+                String otp = generateOTP();
+                trip.setOtp(otp);
+                tripRequestRepository.save(trip);
+                
+                // Send OTP to specific user only
+                TripMessage tripMessage = new TripMessage();
+                tripMessage.setSlotId(slotId);
+                tripMessage.setUserId(userId);
+                tripMessage.setDriverId(driverId);
+                tripMessage.setStatus("OTP_REQUESTED");
+                tripMessage.setOtp(otp);
+                
+                // Send to the specific user only, not to the topic
+                messagingTemplate.convertAndSendToUser(userId, "/queue/trips", tripMessage);
+                
+                return otp;
+            }
+        }
+        return null;
     }
     
     private String generateOTP() {
